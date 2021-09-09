@@ -1,0 +1,337 @@
+openapi: 3.0.1
+info:
+  title: Chat Service
+  description: 'This is a sample Chat Service. '
+  version: 1.0.0
+externalDocs:
+  description: Find out more about Swagger
+  url: 'http://swagger.io'
+servers:
+  - url: /
+tags:
+  - name: room
+    description: Everything about room
+  - name: user
+    description: Everthing about user
+  - name: message
+    description: Everthing about message
+paths:
+  /room:
+    post:
+      tags:
+        - room
+      summary: Create a new room
+      operationId: createRoom
+      requestBody:
+        description: room information
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Room'
+        required: true
+      responses:
+        '200':
+          description: response is  room id string
+        '400':
+          description: Invalid input
+      security:
+        - bearerAuth: []
+      x-codegen-request-body-name: body
+  /room/{roomid}/enter:
+    put:
+      tags:
+        - room
+      summary: Enter a room
+      operationId: enterRoom
+      parameters:
+        - name: roomid
+          in: path
+          required: true
+          schema:
+            type: string
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Enter the Room
+        '400':
+          description: Invalid Room ID
+          content: {}
+  /roomLeave:
+    put:
+      tags:
+        - room
+      summary: Leave a room
+      operationId: leaveRoom
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Left the room
+        '400':
+          description: Error
+  /room/{roomid}:
+    get:
+      tags:
+        - room
+      summary: get the room info.
+      operationId: getRoom
+      parameters:
+        - name: roomid
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: response is room name string
+        '400':
+          description: Invalid Room ID
+  /room/{roomid}/users:
+    get:
+      tags:
+        - room
+      summary: Get user list in a room，only username in list
+      operationId: getUserListFromRoom
+      parameters:
+        - name: roomid
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Get user list in a room，only username in list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserList'
+        '400':
+          description: Invalid Room ID
+  /roomList:
+    post:
+      tags:
+        - room
+      summary: get the room list
+      operationId: listRooms
+      requestBody:
+        description: room page information,pageIndx 0,1..
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RoomControlData'
+        required: true
+      responses:
+        '200':
+          description: RoomNameList
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RoomList'
+        '400':
+          description: Error
+  /message/send:
+    post:
+      tags:
+        - message
+      summary: 'After enter a room, the user can send the message to the current room.'
+      operationId: sendMessage
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Message'
+        required: true
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: successful operation
+        '400':
+          description: Invalid input
+      x-codegen-request-body-name: body
+  /message/retrieve:
+    post:
+      tags:
+        - message
+      summary: >-
+        After enter a room, the user can retrieve the message in the current
+        room
+      operationId: retrieve
+      requestBody:
+        description: pageIndex -1,-2.. -1 means latest messages
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MessageControlData'
+        required: true
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: successful operation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageRetrieve'
+        '400':
+          description: Invalid input
+      x-codegen-request-body-name: body
+  /user:
+    post:
+      tags:
+        - user
+      summary: Create user
+      operationId: createUser
+      requestBody:
+        description: Created user object
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/User'
+        required: true
+      responses:
+        '200':
+          description: successful operation
+      x-codegen-request-body-name: body
+  /userLogin:
+    get:
+      tags:
+        - user
+      summary: Logs user into the system
+      operationId: loginUser
+      parameters:
+        - name: username
+          in: query
+          description: The user name for login
+          required: true
+          schema:
+            type: string
+        - name: password
+          in: query
+          description: The password for login in clear text
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: token
+        '400':
+          description: Invalid username or password.
+  /user/{username}:
+    get:
+      tags:
+        - user
+      summary: Get user by user name
+      operationId: getUserByName
+      parameters:
+        - name: username
+          in: path
+          description: 'The name that needs to be fetched. Use user1 for testing. '
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: successful operation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserResponse'
+        '400':
+          description: Invalid username supplied
+components:
+  schemas:
+    MessageControlData:
+      type: object
+      properties:
+        pageIndex:
+          type: integer
+          format: int32
+          default: -1
+        pageSize:
+          type: integer
+          format: int32
+          default: 100
+    RoomControlData:
+      type: object
+      properties:
+        pageIndex:
+          type: integer
+          format: int32
+          default: 0
+        pageSize:
+          type: integer
+          format: int32
+          default: 100
+    UserResponse:
+      type: object
+      properties:
+        firstName:
+          type: string
+        lastName:
+          type: string
+        email:
+          type: string
+        phone:
+          type: string
+    Message:
+      type: object
+      properties:
+        id:
+          type: string
+        text:
+          type: string
+      xml:
+        name: Message
+    Room:
+      type: object
+      properties:
+        name:
+          type: string
+      xml:
+        name: Message
+    User:
+      type: object
+      properties:
+        username:
+          type: string
+        firstName:
+          type: string
+        lastName:
+          type: string
+        email:
+          type: string
+        password:
+          type: string
+        phone:
+          type: string
+      xml:
+        name: User
+    MessageRetrieve:
+      type: array
+      items:
+        properties:
+          id:
+            type: string
+          text:
+            type: string
+          timestamp:
+            type: string
+    UserList:
+      type: array
+      items:
+        type: string
+    RoomList:
+      type: array
+      items:
+        properties:
+          name: 
+            type: string
+          id:
+            type: string
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
