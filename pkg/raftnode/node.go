@@ -42,6 +42,22 @@ type Node struct {
 	readStateC chan raft.ReadState
 }
 
+func newRaftConfig(lg *zap.Logger, id uint64, storage *raft.MemoryStorage) *raft.Config {
+	return &raft.Config{
+		ID:                        id,
+		ElectionTick:              10,
+		HeartbeatTick:             1,
+		Storage:                   storage,
+		MaxSizePerMsg:             1024 * 1024,
+		MaxInflightMsgs:           256,
+		MaxUncommittedEntriesSize: 1 << 30,
+		PreVote:                   true,
+		CheckQuorum:               true,
+		ReadOnlyOption:            raft.ReadOnlyLeaseBased,
+		Logger:                    newRaftLogger(lg),
+	}
+}
+
 func NewRaftNode(lg *zap.Logger, localURL string, remoteURLs []string, dataDir string) *Node {
 	snapDir := filepath.Join(dataDir, "snap")
 	walDir := filepath.Join(dataDir, "wal")
@@ -53,22 +69,12 @@ func NewRaftNode(lg *zap.Logger, localURL string, remoteURLs []string, dataDir s
 	peerURLs = append(peerURLs, remoteURLs...)
 	sort.Strings(peerURLs)
 	id := types.ID(sort.Search(len(peerURLs), func(i int) bool { return peerURLs[i] >= localURL }) + 1)
-	raftCfg := &raft.Config{
-		ID:                        uint64(id),
-		ElectionTick:              10,
-		HeartbeatTick:             1,
-		Storage:                   storage,
-		MaxSizePerMsg:             1024 * 1024,
-		MaxInflightMsgs:           256,
-		MaxUncommittedEntriesSize: 1 << 30,
-		PreVote:                   true,
-		Logger:                    newRaftLogger(lg),
-	}
 
 	var raftPeers []raft.Peer
 	for i := 1; i <= len(peerURLs); i++ {
 		raftPeers = append(raftPeers, raft.Peer{ID: uint64(i)})
 	}
+	raftCfg := newRaftConfig(lg, uint64(id), storage)
 	node := raft.StartNode(raftCfg, raftPeers)
 
 	md := &metadata.Metadata{ID: id}
@@ -88,8 +94,8 @@ func NewRaftNode(lg *zap.Logger, localURL string, remoteURLs []string, dataDir s
 		storage:     storage,
 		wal:         w,
 		snapshotter: snapshotter,
-		applyTaskC:  make(chan ApplyTask),
-		readStateC:  make(chan raft.ReadState, 1),
+		applyTaskC:  make(chan ApplyTask, 3),
+		readStateC:  make(chan raft.ReadState, 3),
 	}
 	transport := &rafthttp.Transport{
 		Logger:      lg,
@@ -167,17 +173,7 @@ func RestartRaftNode(lg *zap.Logger, dataDir string) (*Node, bool) {
 		return nil, false
 	}
 
-	raftCfg := &raft.Config{
-		ID:                        uint64(md.ID),
-		ElectionTick:              10,
-		HeartbeatTick:             1,
-		Storage:                   storage,
-		MaxSizePerMsg:             1024 * 1024,
-		MaxInflightMsgs:           256,
-		MaxUncommittedEntriesSize: 1 << 30,
-		PreVote:                   true,
-		Logger:                    newRaftLogger(lg),
-	}
+	raftCfg := newRaftConfig(lg, uint64(md.ID), storage)
 	node := raft.RestartNode(raftCfg)
 
 	rc := &Node{
