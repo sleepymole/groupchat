@@ -82,7 +82,7 @@ outer:
 				}
 				if resp.StatusCode != http.StatusOK {
 					logger.Warn(
-						"forwarding request receive unexpected status code",
+						"forwarding request received unexpected status code",
 						zap.String("status", resp.Status),
 						zap.Int("status-code", resp.StatusCode),
 					)
