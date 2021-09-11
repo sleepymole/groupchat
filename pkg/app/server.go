@@ -208,12 +208,12 @@ func (s *Server) handleApplyTasks() {
 
 func (s *Server) proposeRaftCommand(
 	ctx context.Context,
-	event storage.InternalRaftCommand,
+	cmd storage.InternalRaftCommand,
 ) (result interface{}, err error) {
-	event.ID = s.reqIDGen.Next()
-	notify := s.applyNotify.Register(event.ID)
-	if err := s.node.Propose(ctx, event.MustMarshalGOB()); err != nil {
-		s.applyNotify.Trigger(event.ID, nil)
+	cmd.ID = s.reqIDGen.Next()
+	notify := s.applyNotify.Register(cmd.ID)
+	if err := s.node.Propose(ctx, cmd.MustMarshalGOB()); err != nil {
+		s.applyNotify.Trigger(cmd.ID, nil)
 		return nil, err
 	}
 	select {
