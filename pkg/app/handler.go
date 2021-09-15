@@ -349,13 +349,6 @@ func (s *Server) authRequired(c *gin.Context) {
 	}
 }
 
-func (s *Server) linearizableReadRequired(c *gin.Context) {
-	if err := s.linearizableReadNotify(c.Request.Context()); err != nil {
-		writeError(c, err)
-		c.Abort()
-	}
-}
-
 func (s *Server) clusterStartedRequired(c *gin.Context) {
 	if !s.clusterStarted.Load() {
 		writeError(c, errors.New("cluster has not started yet"))
@@ -376,20 +369,20 @@ func (s *Server) newChatRouter() *gin.Engine {
 
 	// User API.
 	router.POST("/user", s.handleUserCreate)
-	router.GET("/user/:name", s.linearizableReadRequired, s.handleUserQuery)
-	router.GET("/userLogin", s.linearizableReadRequired, s.handleUserLogin)
+	router.GET("/user/:name", s.handleUserQuery)
+	router.GET("/userLogin", s.handleUserLogin)
 
 	// Room API.
 	router.POST("/room", s.authRequired, s.handleRoomCreate)
-	router.GET("/room/:id", s.linearizableReadRequired, s.handleRoomQuery)
-	router.POST("/roomList", s.linearizableReadRequired, s.handleRoomList)
-	router.GET("/room/:id/users", s.linearizableReadRequired, s.handleRoomListUsers)
+	router.GET("/room/:id", s.handleRoomQuery)
+	router.POST("/roomList", s.handleRoomList)
+	router.GET("/room/:id/users", s.handleRoomListUsers)
 	router.PUT("/room/:id/enter", s.authRequired, s.handleRoomEnter)
 	router.PUT("/roomLeave", s.authRequired, s.handleRoomLeave)
 
 	// Message API.
 	router.POST("/message/send", s.authRequired, s.handleMessageSend)
-	router.POST("/message/retrieve", s.linearizableReadRequired, s.authRequired, s.handleMessageRetrieve)
+	router.POST("/message/retrieve", s.authRequired, s.handleMessageRetrieve)
 
 	return router
 }

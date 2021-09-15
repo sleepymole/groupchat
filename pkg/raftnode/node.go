@@ -276,11 +276,16 @@ func (rc *Node) serveRaft() {
 				}
 				rc.storage.ApplySnapshot(rd.Snapshot)
 			}
+			if rc.IsLead() {
+				rc.transport.Send(rd.Messages)
+			}
 			if err := rc.wal.Save(rd.HardState, rd.Entries); err != nil {
 				rc.lg.Fatal("failed to save raft entries", zap.Error(err))
 			}
 			rc.storage.Append(rd.Entries)
-			rc.transport.Send(rd.Messages)
+			if !rc.IsLead() {
+				rc.transport.Send(rd.Messages)
+			}
 			rc.node.Advance()
 		}
 	}

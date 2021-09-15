@@ -23,6 +23,7 @@ func main() {
 
 	logEncCfg := zap.NewProductionEncoderConfig()
 	logEncCfg.EncodeTime = zapcore.ISO8601TimeEncoder
+	logEncCfg.EncodeDuration = zapcore.StringDurationEncoder
 	logCfg := zap.NewProductionConfig()
 	logCfg.EncoderConfig = logEncCfg
 	if err := logCfg.Level.UnmarshalText([]byte(*flagLogLevel)); err != nil {
