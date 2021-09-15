@@ -11,7 +11,7 @@ func parseRequestPage(c *gin.Context) (pageIndex, pageSize int, err error) {
 		Index int `json:"pageIndex"`
 		Size  int `json:"pageSize"`
 	}
-	if err = c.ShouldBindJSON(&page); err != nil {
+	if err = shouldBindJSON(c, &page); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}

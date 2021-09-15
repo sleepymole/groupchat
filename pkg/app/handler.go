@@ -2,7 +2,6 @@ package app
 
 import (
 	"bytes"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -12,19 +11,38 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	jsoniter "github.com/json-iterator/go"
 	"go.uber.org/zap"
 
 	"github.com/gozssky/groupchat/pkg/raftnode"
 	"github.com/gozssky/groupchat/pkg/storage"
 )
 
+var json = jsoniter.ConfigCompatibleWithStandardLibrary
+
 func writeError(c *gin.Context, err error) {
 	c.Data(http.StatusBadRequest, "text/plain", []byte(fmt.Sprintf("Error: %v", err)))
 }
 
+func writeJSON(c *gin.Context, obj interface{}) {
+	data, err := json.Marshal(obj)
+	if err != nil {
+		panic(err)
+	}
+	c.Data(http.StatusOK, "application/json", data)
+}
+
+func shouldBindJSON(c *gin.Context, obj interface{}) error {
+	data, err := c.GetRawData()
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(data, obj)
+}
+
 func (s *Server) handleClusterUpdate(c *gin.Context) {
 	var clusterIPs []string
-	if err := c.ShouldBindJSON(&clusterIPs); err != nil {
+	if err := shouldBindJSON(c, &clusterIPs); err != nil {
 		writeError(c, err)
 		return
 	}
@@ -111,7 +129,7 @@ func (s *Server) handleUserCreate(c *gin.Context) {
 		Password  string `json:"password"`
 		Phone     string `json:"phone"`
 	}
-	if err := c.ShouldBindJSON(&user); err != nil {
+	if err := shouldBindJSON(c, &user); err != nil {
 		writeError(c, err)
 		return
 	}
@@ -140,7 +158,7 @@ func (s *Server) handleUserQuery(c *gin.Context) {
 		writeError(c, errors.New("user not exists"))
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{
+	writeJSON(c, gin.H{
 		"firstName": user.FirstName,
 		"lastName":  user.LastName,
 		"email":     user.Email,
@@ -171,7 +189,7 @@ func (s *Server) handleRoomCreate(c *gin.Context) {
 	var room struct {
 		Name string `json:"name"`
 	}
-	if err := c.ShouldBindJSON(&room); err != nil {
+	if err := shouldBindJSON(c, &room); err != nil {
 		writeError(c, err)
 		return
 	}
@@ -225,7 +243,7 @@ func (s *Server) handleRoomList(c *gin.Context) {
 			ID:   strconv.Itoa(room.ID),
 		}
 	}
-	c.JSON(http.StatusOK, respRooms)
+	writeJSON(c, respRooms)
 }
 
 func (s *Server) handleRoomListUsers(c *gin.Context) {
@@ -246,7 +264,7 @@ func (s *Server) handleRoomListUsers(c *gin.Context) {
 	if users == nil {
 		users = make([]string, 0)
 	}
-	c.JSON(http.StatusOK, users)
+	writeJSON(c, users)
 }
 
 func (s *Server) handleRoomEnter(c *gin.Context) {
@@ -278,7 +296,7 @@ func (s *Server) handleMessageSend(c *gin.Context) {
 		ID   string `json:"id"`
 		Text string `json:"text"`
 	}
-	if err := c.ShouldBindJSON(&msg); err != nil {
+	if err := shouldBindJSON(c, &msg); err != nil {
 		writeError(c, err)
 		return
 	}
@@ -330,7 +348,7 @@ func (s *Server) handleMessageRetrieve(c *gin.Context) {
 			Timestamp: strconv.Itoa(msg.TS),
 		}
 	}
-	c.JSON(http.StatusOK, respMsgs)
+	writeJSON(c, respMsgs)
 }
 
 func (s *Server) authRequired(c *gin.Context) {
