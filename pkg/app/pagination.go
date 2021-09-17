@@ -1,18 +1,13 @@
 package app
 
-import (
-	"net/http"
+import "github.com/valyala/fasthttp"
 
-	"github.com/gin-gonic/gin"
-)
-
-func parseRequestPage(c *gin.Context) (pageIndex, pageSize int, err error) {
+func parseRequestPage(ctx *fasthttp.RequestCtx) (pageIndex, pageSize int, err error) {
 	var page struct {
 		Index int `json:"pageIndex"`
 		Size  int `json:"pageSize"`
 	}
-	if err = shouldBindJSON(c, &page); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+	if !bindJSON(ctx, &page) {
 		return
 	}
 	return page.Index, page.Size, nil

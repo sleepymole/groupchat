@@ -13,7 +13,8 @@ import (
 )
 
 var (
-	flagPort     = kingpin.Flag("port", "Port to listen for both client requests and peer raft messages").Default("8080").Int()
+	flagPort     = kingpin.Flag("port", "Port to listen for client requests").Default("8080").Int()
+	flagRaftPort = kingpin.Flag("raft-port", "Port to listen for peer raft messages").Default("8081").Int()
 	flagDataDir  = kingpin.Flag("data-dir", "Data directory to store snapshot and WAL logs.").Default("/tmp/groupchat").String()
 	flagLogLevel = kingpin.Flag("log-level", "Log level.").Default("info").Enum("debug", "info", "warn", "error")
 )
@@ -44,10 +45,10 @@ func main() {
 		logger.Fatal("data dir is not writable", zap.Error(err))
 	}
 	if err := os.MkdirAll(*flagDataDir, 0755); err != nil {
-		logger.Fatal("failed create data dir", zap.Error(err))
+		logger.Fatal("failed to create data dir", zap.Error(err))
 	}
-	srv := app.NewServer(logger, *flagPort, *flagDataDir)
+	srv := app.NewServer(logger, *flagPort, *flagRaftPort, *flagDataDir)
 	if err := srv.Run(); err != nil {
-		logger.Fatal("failed run server", zap.Error(err))
+		logger.Fatal("failed to run server", zap.Error(err))
 	}
 }

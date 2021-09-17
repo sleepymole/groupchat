@@ -9,16 +9,14 @@ import (
 	"encoding/binary"
 	"fmt"
 	"net/http"
-	"strings"
 	"sync"
 	"time"
 
-	"github.com/gin-gonic/gin"
+	"github.com/valyala/fasthttp"
 	"go.etcd.io/etcd/pkg/v3/idutil"
 	"go.etcd.io/etcd/pkg/v3/wait"
 	"go.etcd.io/etcd/raft/v3"
 	"go.etcd.io/etcd/raft/v3/raftpb"
-	"go.etcd.io/etcd/server/v3/etcdserver/api/rafthttp"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
 
@@ -28,15 +26,14 @@ import (
 )
 
 type Server struct {
-	lg      *zap.Logger
-	port    int
-	dataDir string
-	aead    cipher.AEAD
+	lg       *zap.Logger
+	port     int
+	raftPort int
+	dataDir  string
+	aead     cipher.AEAD
 
 	once           sync.Once
 	node           *raftnode.Node
-	rafthttp       http.Handler
-	raftStarted    atomic.Bool
 	clusterStarted atomic.Bool
 
 	rwm     sync.RWMutex
@@ -51,35 +48,24 @@ type Server struct {
 	appliedIndex atomic.Uint64
 }
 
-func NewServer(lg *zap.Logger, port int, dataDir string) *Server {
+func NewServer(lg *zap.Logger, port, raftPort int, dataDir string) *Server {
 	return &Server{
-		lg:      lg,
-		port:    port,
-		dataDir: dataDir,
-		storage: storage.NewStorage(),
+		lg:       lg,
+		port:     port,
+		raftPort: raftPort,
+		dataDir:  dataDir,
+		storage:  storage.NewStorage(),
 	}
 }
 
 func (s *Server) Run() error {
-	gin.SetMode(gin.ReleaseMode)
-	router := s.newChatRouter()
+	chatAPI := s.newChatHandler()
 	node, ok := raftnode.RestartRaftNode(s.lg, s.dataDir)
 	if ok {
 		s.lg.Info("restart the existing raft cluster")
 		go s.bootstrap(func() *raftnode.Node { return node })
 	}
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, rafthttp.RaftPrefix) {
-			if s.raftStarted.Load() {
-				s.rafthttp.ServeHTTP(w, r)
-			} else {
-				w.WriteHeader(http.StatusForbidden)
-			}
-		} else {
-			router.ServeHTTP(w, r)
-		}
-	})
-	return http.ListenAndServe(fmt.Sprintf(":%d", s.port), nil)
+	return fasthttp.ListenAndServe(fmt.Sprintf(":%d", s.port), chatAPI)
 }
 
 func (s *Server) initAEAD() {
@@ -142,7 +128,11 @@ func (s *Server) getOrInitSecretKey() []byte {
 func (s *Server) bootstrap(newRaftNode func() *raftnode.Node) {
 	s.once.Do(func() {
 		s.node = newRaftNode()
-		s.rafthttp = s.node.Handler()
+		go func() {
+			if err := http.ListenAndServe(fmt.Sprintf(":%d", s.raftPort), s.node.Handler()); err != nil {
+				s.lg.Fatal("failed to run raft server")
+			}
+		}()
 		s.reqIDGen = idutil.NewGenerator(uint16(s.node.ID()), time.Now())
 		s.readWaitC = make(chan struct{}, 1)
 		s.readyRead = future.NewResult()
@@ -150,7 +140,6 @@ func (s *Server) bootstrap(newRaftNode func() *raftnode.Node) {
 		s.applyNotify = wait.New()
 		go s.handleApplyTasks()
 		go s.linearizableReadLoop()
-		s.raftStarted.Store(true)
 		s.initAEAD()
 		s.clusterStarted.Store(true)
 	})

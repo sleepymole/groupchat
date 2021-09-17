@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	jsoniter "github.com/json-iterator/go"
+	"github.com/valyala/fasthttp"
 	"go.uber.org/zap"
 
 	"github.com/gozssky/groupchat/pkg/raftnode"
@@ -20,35 +20,38 @@ import (
 
 var json = jsoniter.ConfigCompatibleWithStandardLibrary
 
-func writeError(c *gin.Context, err error) {
-	c.Data(http.StatusBadRequest, "text/plain", []byte(fmt.Sprintf("Error: %v", err)))
+func writeError(ctx *fasthttp.RequestCtx, err error) {
+	ctx.SetStatusCode(fasthttp.StatusBadRequest)
+	ctx.SetContentType("text/plain")
+	ctx.WriteString(err.Error())
 }
 
-func writeJSON(c *gin.Context, obj interface{}) {
+func writeJSON(ctx *fasthttp.RequestCtx, obj interface{}) {
 	data, err := json.Marshal(obj)
 	if err != nil {
 		panic(err)
 	}
-	c.Data(http.StatusOK, "application/json", data)
+	ctx.SetStatusCode(fasthttp.StatusOK)
+	ctx.SetContentType("application/json")
+	ctx.Write(data)
 }
 
-func shouldBindJSON(c *gin.Context, obj interface{}) error {
-	data, err := c.GetRawData()
-	if err != nil {
-		return err
+func bindJSON(ctx *fasthttp.RequestCtx, obj interface{}) bool {
+	if err := json.Unmarshal(ctx.PostBody(), obj); err != nil {
+		writeError(ctx, err)
+		return false
 	}
-	return json.Unmarshal(data, obj)
+	return true
 }
 
-func (s *Server) handleClusterUpdate(c *gin.Context) {
+func (s *Server) handleClusterUpdate(ctx *fasthttp.RequestCtx) {
 	var clusterIPs []string
-	if err := shouldBindJSON(c, &clusterIPs); err != nil {
-		writeError(c, err)
+	if !bindJSON(ctx, &clusterIPs) {
 		return
 	}
 	addrs, err := net.InterfaceAddrs()
 	if err != nil {
-		writeError(c, err)
+		writeError(ctx, err)
 		return
 	}
 
@@ -67,31 +70,35 @@ outer:
 		}
 	}
 	if len(localIP) == 0 {
-		writeError(c, errors.New("local ip not exists in cluster"))
+		writeError(ctx, errors.New("local ip not exists in cluster"))
 		return
 	}
 	//goland:noinspection HttpUrlsUsage
-	localURL := fmt.Sprintf("http://%s:%d", localIP, s.port)
+	localURL := fmt.Sprintf("http://%s:%d", localIP, s.raftPort)
+	//goland:noinspection HttpUrlsUsage
+	localClusterURL := fmt.Sprintf("http://%s:%d", localIP, s.port)
 	var remoteURLs []string
 	for _, ip := range clusterIPs {
 		if ip == localIP {
 			continue
 		}
 		//goland:noinspection HttpUrlsUsage
-		remoteURL := fmt.Sprintf("http://%s:%d", ip, s.port)
+		remoteURL := fmt.Sprintf("http://%s:%d", ip, s.raftPort)
 		remoteURLs = append(remoteURLs, remoteURL)
-		if len(c.GetHeader("Referer")) == 0 {
+		//goland:noinspection HttpUrlsUsage
+		remoteClusterURL := fmt.Sprintf("http://%s:%d/updateCluster", ip, s.port)
+		if len(ctx.Request.Header.Peek("Referer")) == 0 {
 			go func() {
 				data, err := json.Marshal(clusterIPs)
 				if err != nil {
 					panic(err)
 				}
-				req, err := http.NewRequest(http.MethodPost, remoteURL+"/updateCluster", bytes.NewReader(data))
+				req, err := http.NewRequest(http.MethodPost, remoteClusterURL, bytes.NewReader(data))
 				if err != nil {
 					panic(err)
 				}
-				req.Header.Add("Referer", localURL)
-				logger := s.lg.With(zap.String("remote-url", remoteURL))
+				req.Header.Add("Referer", localClusterURL)
+				logger := s.lg.With(zap.String("remote-cluster-url", remoteClusterURL))
 				logger.Info("forward updateCluster request to remote")
 				resp, err := http.DefaultClient.Do(req)
 				if err != nil {
@@ -118,9 +125,9 @@ outer:
 	})
 }
 
-func (s *Server) handleClusterCheck(_ *gin.Context) {}
+func (s *Server) handleClusterCheck(_ *fasthttp.RequestCtx) {}
 
-func (s *Server) handleUserCreate(c *gin.Context) {
+func (s *Server) handleUserCreate(ctx *fasthttp.RequestCtx) {
 	var user struct {
 		UserName  string `json:"username"`
 		FirstName string `json:"firstName"`
@@ -129,11 +136,10 @@ func (s *Server) handleUserCreate(c *gin.Context) {
 		Password  string `json:"password"`
 		Phone     string `json:"phone"`
 	}
-	if err := shouldBindJSON(c, &user); err != nil {
-		writeError(c, err)
+	if !bindJSON(ctx, &user) {
 		return
 	}
-	if _, err := s.proposeRaftCommand(c.Request.Context(), storage.InternalRaftCommand{
+	if _, err := s.proposeRaftCommand(ctx, storage.InternalRaftCommand{
 		CreateUser: &storage.CreateUserCommand{
 			UserName:  user.UserName,
 			FirstName: user.FirstName,
@@ -143,22 +149,22 @@ func (s *Server) handleUserCreate(c *gin.Context) {
 			Phone:     user.Phone,
 		},
 	}); err != nil {
-		writeError(c, err)
+		writeError(ctx, err)
 		return
 	}
 }
 
-func (s *Server) handleUserQuery(c *gin.Context) {
-	name := c.Param("name")
+func (s *Server) handleUserQuery(ctx *fasthttp.RequestCtx) {
+	name := strings.TrimPrefix(string(ctx.Path()), "/user/")
 	s.rwm.RLock()
 	defer s.rwm.RUnlock()
 
 	user, ok := s.storage.Users[name]
 	if !ok {
-		writeError(c, errors.New("user not exists"))
+		writeError(ctx, errors.New("user not exists"))
 		return
 	}
-	writeJSON(c, gin.H{
+	writeJSON(ctx, map[string]string{
 		"firstName": user.FirstName,
 		"lastName":  user.LastName,
 		"email":     user.Email,
@@ -166,65 +172,70 @@ func (s *Server) handleUserQuery(c *gin.Context) {
 	})
 }
 
-func (s *Server) handleUserLogin(c *gin.Context) {
-	username := c.Query("username")
-	password := c.Query("password")
+func (s *Server) handleUserLogin(ctx *fasthttp.RequestCtx) {
+	username := string(ctx.QueryArgs().Peek("username"))
+	password := string(ctx.QueryArgs().Peek("password"))
 	s.rwm.RLock()
 	defer s.rwm.RUnlock()
 
 	user, ok := s.storage.Users[username]
 	if !ok {
-		writeError(c, errors.New("user not exists"))
+		writeError(ctx, errors.New("user not exists"))
 		return
 	}
 	if password != user.Password {
-		writeError(c, errors.New("password is wrong"))
+		writeError(ctx, errors.New("password is wrong"))
 		return
 	}
 	token := generateToken(username, s.aead)
-	c.Data(http.StatusOK, "text/plain", []byte(token))
+	ctx.SetStatusCode(fasthttp.StatusOK)
+	ctx.SetContentType("text/plain")
+	ctx.WriteString(token)
 }
 
-func (s *Server) handleRoomCreate(c *gin.Context) {
+func (s *Server) handleRoomCreate(ctx *fasthttp.RequestCtx) {
 	var room struct {
 		Name string `json:"name"`
 	}
-	if err := shouldBindJSON(c, &room); err != nil {
-		writeError(c, err)
+	if !bindJSON(ctx, &room) {
 		return
 	}
-	result, err := s.proposeRaftCommand(c.Request.Context(), storage.InternalRaftCommand{
+	result, err := s.proposeRaftCommand(ctx, storage.InternalRaftCommand{
 		CreateRoom: &storage.CreateRoomCommand{Name: room.Name},
 	})
 	if err != nil {
-		writeError(c, err)
+		writeError(ctx, err)
 		return
 	}
 	roomID := result.(int)
-	c.Data(http.StatusOK, "text/plain", []byte(strconv.Itoa(roomID)))
+	ctx.SetStatusCode(fasthttp.StatusOK)
+	ctx.SetContentType("text/plain")
+	ctx.WriteString(strconv.Itoa(roomID))
 }
 
-func (s *Server) handleRoomQuery(c *gin.Context) {
-	idStr := c.Param("id")
+func (s *Server) handleRoomQuery(ctx *fasthttp.RequestCtx) {
+	idStr := strings.TrimPrefix(string(ctx.Path()), "/room/")
 	id, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil {
-		writeError(c, errors.New("room not exists"))
+		writeError(ctx, errors.New("room not exists"))
 		return
 	}
 	s.rwm.RLock()
 	defer s.rwm.RUnlock()
 	room, ok := s.storage.Rooms[int(id)]
 	if !ok {
-		writeError(c, errors.New("room not exists"))
+		writeError(ctx, errors.New("room not exists"))
 		return
 	}
-	c.Data(http.StatusOK, "text/plain", []byte(room.Name))
+	ctx.SetStatusCode(fasthttp.StatusOK)
+	ctx.SetContentType("text/plain")
+	ctx.WriteString(room.Name)
 }
 
-func (s *Server) handleRoomList(c *gin.Context) {
-	pageIndex, pageSize, err := parseRequestPage(c)
+func (s *Server) handleRoomList(ctx *fasthttp.RequestCtx) {
+	pageIndex, pageSize, err := parseRequestPage(ctx)
 	if err != nil {
-		writeError(c, err)
+		writeError(ctx, err)
 		return
 	}
 	s.rwm.RLock()
@@ -243,93 +254,92 @@ func (s *Server) handleRoomList(c *gin.Context) {
 			ID:   strconv.Itoa(room.ID),
 		}
 	}
-	writeJSON(c, respRooms)
+	writeJSON(ctx, respRooms)
 }
 
-func (s *Server) handleRoomListUsers(c *gin.Context) {
-	idStr := c.Param("id")
+func (s *Server) handleRoomListUsers(ctx *fasthttp.RequestCtx) {
+	idStr := strings.TrimSuffix(strings.TrimPrefix(string(ctx.Path()), "/room/"), "/users")
 	id, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil {
-		writeError(c, errors.New("room not exists"))
+		writeError(ctx, errors.New("room not exists"))
 		return
 	}
 	s.rwm.RLock()
 	defer s.rwm.RUnlock()
 	room, ok := s.storage.Rooms[int(id)]
 	if !ok {
-		writeError(c, errors.New("room not exists"))
+		writeError(ctx, errors.New("room not exists"))
 		return
 	}
 	users := room.Users
 	if users == nil {
 		users = make([]string, 0)
 	}
-	writeJSON(c, users)
+	writeJSON(ctx, users)
 }
 
-func (s *Server) handleRoomEnter(c *gin.Context) {
-	username, _ := c.Get("username")
-	idStr := c.Param("id")
+func (s *Server) handleRoomEnter(ctx *fasthttp.RequestCtx) {
+	username := ctx.UserValue("username").(string)
+	idStr := strings.TrimSuffix(strings.TrimPrefix(string(ctx.Path()), "/room/"), "/enter")
 	id, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil {
-		writeError(c, errors.New("room not exists"))
+		writeError(ctx, errors.New("room not exists"))
 		return
 	}
-	if _, err := s.proposeRaftCommand(c.Request.Context(), storage.InternalRaftCommand{
-		EnterRoom: &storage.EnterRoomCommand{UserName: username.(string), RoomID: int(id)},
+	if _, err := s.proposeRaftCommand(ctx, storage.InternalRaftCommand{
+		EnterRoom: &storage.EnterRoomCommand{UserName: username, RoomID: int(id)},
 	}); err != nil {
-		writeError(c, err)
+		writeError(ctx, err)
 	}
 }
 
-func (s *Server) handleRoomLeave(c *gin.Context) {
-	username, _ := c.Get("username")
-	if _, err := s.proposeRaftCommand(c.Request.Context(), storage.InternalRaftCommand{
-		LeaveRoom: &storage.LeaveRoomCommand{UserName: username.(string)},
+func (s *Server) handleRoomLeave(ctx *fasthttp.RequestCtx) {
+	username := ctx.UserValue("username").(string)
+	if _, err := s.proposeRaftCommand(ctx, storage.InternalRaftCommand{
+		LeaveRoom: &storage.LeaveRoomCommand{UserName: username},
 	}); err != nil {
-		writeError(c, err)
+		writeError(ctx, err)
 	}
 }
 
-func (s *Server) handleMessageSend(c *gin.Context) {
+func (s *Server) handleMessageSend(ctx *fasthttp.RequestCtx) {
 	var msg struct {
 		ID   string `json:"id"`
 		Text string `json:"text"`
 	}
-	if err := shouldBindJSON(c, &msg); err != nil {
-		writeError(c, err)
+	if !bindJSON(ctx, &msg) {
 		return
 	}
-	username, _ := c.Get("username")
-	if _, err := s.proposeRaftCommand(c.Request.Context(), storage.InternalRaftCommand{
+	username := ctx.UserValue("username").(string)
+	if _, err := s.proposeRaftCommand(ctx, storage.InternalRaftCommand{
 		SendMessage: &storage.SendMessageCommand{
 			ID:       msg.ID,
 			TS:       int(time.Now().Unix()),
 			Text:     msg.Text,
-			UserName: username.(string),
+			UserName: username,
 		},
 	}); err != nil {
-		writeError(c, err)
+		writeError(ctx, err)
 	}
 }
 
-func (s *Server) handleMessageRetrieve(c *gin.Context) {
-	pageIndex, pageSize, err := parseRequestPage(c)
+func (s *Server) handleMessageRetrieve(ctx *fasthttp.RequestCtx) {
+	pageIndex, pageSize, err := parseRequestPage(ctx)
 	if err != nil {
-		writeError(c, err)
+		writeError(ctx, err)
 		return
 	}
-	username, _ := c.Get("username")
+	username := ctx.UserValue("username").(string)
 	s.rwm.RLock()
 	defer s.rwm.RUnlock()
-	roomID := s.storage.Users[username.(string)].RoomID
+	roomID := s.storage.Users[username].RoomID
 	if roomID <= 0 {
-		writeError(c, errors.New("user out of room"))
+		writeError(ctx, errors.New("user out of room"))
 		return
 	}
 	room, ok := s.storage.Rooms[roomID]
 	if !ok {
-		writeError(c, errors.New("room not exists"))
+		writeError(ctx, errors.New("room not exists"))
 		return
 	}
 	size := len(room.Messages)
@@ -348,59 +358,77 @@ func (s *Server) handleMessageRetrieve(c *gin.Context) {
 			Timestamp: strconv.Itoa(msg.TS),
 		}
 	}
-	writeJSON(c, respMsgs)
+	writeJSON(ctx, respMsgs)
 }
 
-func (s *Server) authRequired(c *gin.Context) {
-	fields := strings.Fields(c.GetHeader("Authorization"))
+func (s *Server) checkAuth(ctx *fasthttp.RequestCtx) bool {
+	fields := bytes.Fields(ctx.Request.Header.Peek("Authorization"))
 	if len(fields) == 0 {
-		writeError(c, errors.New("token is missing"))
-		c.Abort()
-		return
+		writeError(ctx, errors.New("token is missing"))
+		return false
 	}
 	token := fields[len(fields)-1]
-	if username, ok := parseUserNameFromToken(token, s.aead); ok {
-		c.Set("username", username)
-	} else {
-		writeError(c, errors.New("token is invalid"))
-		c.Abort()
+	username, ok := parseUserNameFromToken(string(token), s.aead)
+	if !ok {
+		writeError(ctx, errors.New("token is invalid"))
+		return false
 	}
+	ctx.SetUserValue("username", username)
+	return true
 }
 
-func (s *Server) clusterStartedRequired(c *gin.Context) {
-	if !s.clusterStarted.Load() {
-		writeError(c, errors.New("cluster has not started yet"))
-		c.Abort()
+func (s *Server) newChatHandler() fasthttp.RequestHandler {
+	return func(ctx *fasthttp.RequestCtx) {
+		method := strings.ToUpper(string(ctx.Method()))
+		path := string(ctx.Path())
+		if method == fasthttp.MethodPost && path == "/updateCluster" {
+			s.handleClusterUpdate(ctx)
+			return
+		}
+
+		// The follow requests must be sent after the cluster is started.
+		if !s.clusterStarted.Load() {
+			writeError(ctx, errors.New("cluster has not started yet"))
+			return
+		}
+		if method == fasthttp.MethodGet && path == "/checkCluster" {
+			s.handleClusterCheck(ctx)
+			return
+		}
+
+		switch {
+		// User API.
+		case method == fasthttp.MethodPost && path == "/user":
+			s.handleUserCreate(ctx)
+		case method == fasthttp.MethodGet && strings.HasPrefix(path, "/user/"):
+			s.handleUserQuery(ctx)
+		case method == fasthttp.MethodGet && path == "/userLogin":
+			s.handleUserLogin(ctx)
+
+		// Room API.
+		case method == fasthttp.MethodPost && path == "/room" && s.checkAuth(ctx):
+			s.handleRoomCreate(ctx)
+		case method == fasthttp.MethodGet &&
+			strings.HasPrefix(path, "/room/") &&
+			strings.Count(path, "/") == 2:
+			s.handleRoomQuery(ctx)
+		case method == fasthttp.MethodPost && path == "/roomList":
+			s.handleRoomList(ctx)
+		case method == fasthttp.MethodGet &&
+			strings.HasPrefix(path, "/room/") &&
+			strings.HasSuffix(path, "/users"):
+			s.handleRoomListUsers(ctx)
+		case method == fasthttp.MethodPut && strings.HasPrefix(path, "/room/") &&
+			strings.HasSuffix(path, "/enter") && s.checkAuth(ctx):
+			s.handleRoomEnter(ctx)
+		case method == fasthttp.MethodPut && path == "/roomLeave" && s.checkAuth(ctx):
+			s.handleRoomLeave(ctx)
+
+		// Message API.
+		case method == fasthttp.MethodPost && path == "/message/send" && s.checkAuth(ctx):
+			s.handleMessageSend(ctx)
+		case method == fasthttp.MethodPost && path == "/message/retrieve" && s.checkAuth(ctx):
+			s.handleMessageRetrieve(ctx)
+		}
 	}
-}
-
-func (s *Server) newChatRouter() *gin.Engine {
-	router := gin.New()
-	router.Use(gin.Recovery())
-
-	router.POST("/updateCluster", s.handleClusterUpdate)
-
-	// The follow requests must be sent after the cluster is started.
-	router.Use(s.clusterStartedRequired)
-
-	router.GET("/checkCluster", s.handleClusterCheck)
-
-	// User API.
-	router.POST("/user", s.handleUserCreate)
-	router.GET("/user/:name", s.handleUserQuery)
-	router.GET("/userLogin", s.handleUserLogin)
-
-	// Room API.
-	router.POST("/room", s.authRequired, s.handleRoomCreate)
-	router.GET("/room/:id", s.handleRoomQuery)
-	router.POST("/roomList", s.handleRoomList)
-	router.GET("/room/:id/users", s.handleRoomListUsers)
-	router.PUT("/room/:id/enter", s.authRequired, s.handleRoomEnter)
-	router.PUT("/roomLeave", s.authRequired, s.handleRoomLeave)
-
-	// Message API.
-	router.POST("/message/send", s.authRequired, s.handleMessageSend)
-	router.POST("/message/retrieve", s.authRequired, s.handleMessageRetrieve)
-
-	return router
 }
